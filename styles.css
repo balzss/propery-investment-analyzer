@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+body { font-family: 'Inter', sans-serif; }
 .currency-input-wrapper { position: relative; }
 .currency-symbol { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #6b7280; pointer-events: none;}
 .currency-input { padding-left: 50px; }
@@ -19,54 +19,33 @@ body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
     border-bottom: 1px solid #4f46e5;
     background: #f8fafc;
 }
+
 /* Settings Drawer */
-.settings-drawer {
-    transform: translateX(100%);
-    transition: transform 0.3s ease-in-out;
-}
-.settings-drawer.open {
-    transform: translateX(0);
-}
+.settings-drawer { transform: translateX(100%); transition: transform 0.3s ease-in-out; }
+.settings-drawer.open { transform: translateX(0); }
 
 /* Shared Data Banner */
-.shared-banner {
-    background: #fffbeb;
-    color: #92400e;
-    padding: 10px 16px;
-    border-radius: 8px;
-    border: 1px solid #f59e0b;
-}
+.shared-banner { background: #fffbeb; color: #92400e; padding: 10px 16px; border-radius: 8px; border: 1px solid #f59e0b; }
+tr.shared-row td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
+tr.shared-row td { background: #fffbeb !important; }
 
-/* Shared property row highlight */
-tr.shared-row td:first-child {
-    box-shadow: inset 3px 0 0 #f59e0b;
-}
-tr.shared-row td {
-    background: #fffbeb !important;
-}
+/* Toast */
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1f2937; color: white; padding: 10px 20px; border-radius: 8px; font-size: 14px; z-index: 200; opacity: 0; transition: opacity 0.3s; }
+.toast.show { opacity: 1; }
 
-/* Toast Notification */
-.toast {
-    position: fixed;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #1f2937;
-    color: white;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-size: 14px;
-    z-index: 200;
-    opacity: 0;
-    transition: opacity 0.3s;
-}
-.toast.show {
-    opacity: 1;
-}
+/* Table scroll */
+.results-table-container { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
-/* Prevent table from stretching too far */
-.results-table-container {
-    max-width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-}
+/* ===== Dark Theme — only custom components that can't use Tailwind classes ===== */
+html.dark { color-scheme: dark; }
+html.dark .percent-symbol,
+html.dark .suffix-symbol,
+html.dark .currency-symbol { color: #a1a1aa; /* zinc-400 */ }
+html.dark .table-input { border-bottom-color: #52525b; /* zinc-600 */ color: #e4e4e7; /* zinc-200 */ }
+html.dark .table-input:focus { background: #18181b; /* zinc-900 */ }
+html.dark .shared-banner { background: rgb(245 158 11 / 0.1); color: #fbbf24; /* amber-400 */ border-color: rgb(245 158 11 / 0.3); }
+html.dark tr.shared-row td { background: rgb(245 158 11 / 0.08) !important; }
+html.dark .toast { background: #e4e4e7; /* zinc-200 */ color: #18181b; /* zinc-900 */ }
+html.dark ::-webkit-scrollbar { width: 8px; }
+html.dark ::-webkit-scrollbar-track { background: #18181b; /* zinc-900 */ }
+html.dark ::-webkit-scrollbar-thumb { background: #52525b; /* zinc-600 */ border-radius: 4px; }

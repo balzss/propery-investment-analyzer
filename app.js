@@ -20,6 +20,8 @@ const validateProperty = (fields) => {
 let properties = [];
 let valueChartInstance = null;
 let roiChartInstance = null;
+let roiValueChartInstance = null;
+let equityChartInstance = null;
 let propertyIdToDelete = null;
 
 let isSharedView = false;
@@ -29,7 +31,7 @@ const defaultSettings = { taxRate: 4, lawyerRate: 0.5, inflation: 3.5 };
 let settings = { ...defaultSettings };
 
 const loadSettings = () => {
-    const stored = localStorage.getItem('property_analyzer_settings');
+    const stored = localStorage.getItem('property_calculator_settings');
     if (stored) {
         try {
             const parsed = JSON.parse(stored);
@@ -45,13 +47,34 @@ const loadSettings = () => {
 
 const saveSettings = () => {
     if (isSharedView) return;
-    localStorage.setItem('property_analyzer_settings', JSON.stringify(settings));
+    localStorage.setItem('property_calculator_settings', JSON.stringify(settings));
+};
+
+// --- User Preferences (local-only, not shared) ---
+const defaultPreferences = { theme: 'light', language: 'en', currency: 'huf', chartYears: 20 };
+let preferences = { ...defaultPreferences };
+
+const loadPreferences = () => {
+    const stored = localStorage.getItem('property_calculator_preferences');
+    if (stored) {
+        try {
+            preferences = { ...defaultPreferences, ...JSON.parse(stored) };
+        } catch (e) {
+            preferences = { ...defaultPreferences };
+        }
+    } else {
+        preferences = { ...defaultPreferences };
+    }
+};
+
+const savePreferences = () => {
+    localStorage.setItem('property_calculator_preferences', JSON.stringify(preferences));
 };
 
 // --- Local Storage Helper ---
 const saveProperties = () => {
     if (isSharedView) return;
-    localStorage.setItem('property_analyzer_data', JSON.stringify(properties));
+    localStorage.setItem('property_calculator_data', JSON.stringify(properties));
 };
 
 // --- Formatters ---
@@ -102,18 +125,20 @@ const getRemainingBalance = (principal, annualRate, termYears, year) => {
 const calculateProjectedROI = (prop, targetYear) => {
     if (prop.totalInvested <= 0) return 0;
 
-    let currentPrice = prop.price;
+    let currentPrice = prop.afterRenoValue || prop.price;
     let accumulatedCashflow = 0;
     const annualMortgage = prop.monthlyPayment * 12;
     const inflationRate = settings.inflation / 100;
+    const monthlyCosts = prop.monthlyCosts || 0;
 
     for (let i = 1; i <= targetYear; i++) {
         // Update Price (Assuming price grows at inflation rate)
         currentPrice = currentPrice * (1 + inflationRate);
 
-        // Update Cashflow (Rent grows with inflation)
+        // Update Cashflow (Rent and costs grow with inflation)
         const yearlyRent = (prop.rent * 12) * Math.pow(1 + inflationRate, i - 1);
-        const yearlyCashflow = yearlyRent - annualMortgage;
+        const yearlyCosts = (monthlyCosts * 12) * Math.pow(1 + inflationRate, i - 1);
+        const yearlyCashflow = yearlyRent - annualMortgage - yearlyCosts;
         accumulatedCashflow += yearlyCashflow;
     }
 
@@ -129,6 +154,27 @@ const calculateProjectedROI = (prop, targetYear) => {
     return (profit / prop.totalInvested) * 100;
 };
 
+const calculateProjectedProfit = (prop, targetYear) => {
+    if (prop.totalInvested <= 0) return 0;
+
+    let currentPrice = prop.afterRenoValue || prop.price;
+    let accumulatedCashflow = 0;
+    const annualMortgage = prop.monthlyPayment * 12;
+    const inflationRate = settings.inflation / 100;
+    const monthlyCosts = prop.monthlyCosts || 0;
+
+    for (let i = 1; i <= targetYear; i++) {
+        currentPrice = currentPrice * (1 + inflationRate);
+        const yearlyRent = (prop.rent * 12) * Math.pow(1 + inflationRate, i - 1);
+        const yearlyCosts = (monthlyCosts * 12) * Math.pow(1 + inflationRate, i - 1);
+        accumulatedCashflow += yearlyRent - annualMortgage - yearlyCosts;
+    }
+
+    const remainingLoan = getRemainingBalance(prop.loanAmount, prop.rate, prop.term, targetYear);
+    const equity = currentPrice - remainingLoan;
+    return (equity + accumulatedCashflow) - prop.totalInvested;
+};
+
 const recalculateProperty = (prop) => {
     const price = prop.price;
     const rent = prop.rent;
@@ -136,6 +182,10 @@ const recalculateProperty = (prop) => {
     const renoCost = prop.renoCost;
     const rate = prop.rate;
     const term = prop.term;
+
+    // Default new fields for backwards compatibility
+    if (!prop.afterRenoValue) prop.afterRenoValue = price;
+    if (!prop.monthlyCosts) prop.monthlyCosts = 0;
 
     // Fees
     const tax = price * (settings.taxRate / 100);
@@ -147,7 +197,7 @@ const recalculateProperty = (prop) => {
 
     const loanAmount = price - downPayment;
     const monthlyPayment = calculateMortgage(loanAmount, rate, term);
-    const cashflow = rent - monthlyPayment;
+    const cashflow = rent - monthlyPayment - prop.monthlyCosts;
 
     // Update prop object
     prop.downPayment = downPayment;
@@ -259,6 +309,8 @@ function addProperty() {
     const priceMillions = parseFloat(document.getElementById('pValue').value);
     const downPaymentPercent = parseFloat(document.getElementById('pDownPercent').value);
     const renoMillions = parseFloat(document.getElementById('pReno').value) || 0;
+    const afterRenoMillions = parseFloat(document.getElementById('pAfterRenoValue').value) || 0;
+    const monthlyCostsThousands = parseFloat(document.getElementById('pMonthlyCosts').value) || 0;
     const rate = parseFloat(document.getElementById('pRate').value);
     const term = parseFloat(document.getElementById('pTerm').value);
     const rentThousands = parseFloat(document.getElementById('pRent').value);
@@ -266,6 +318,8 @@ function addProperty() {
     const price = priceMillions * 1000000;
     const rent = rentThousands * 1000;
     const renoCost = renoMillions * 1000000;
+    const afterRenoValue = afterRenoMillions > 0 ? afterRenoMillions * 1000000 : price;
+    const monthlyCosts = monthlyCostsThousands * 1000;
 
     // Validate
     const errors = validateProperty({ price, downPaymentPercent, rate, term, rent });
@@ -280,6 +334,8 @@ function addProperty() {
         price,
         rent,
         renoCost,
+        afterRenoValue,
+        monthlyCosts,
         downPaymentPercent,
         rate,
         term,
@@ -295,6 +351,8 @@ function addProperty() {
     document.getElementById('pValue').value = '';
     document.getElementById('pRent').value = '';
     document.getElementById('pReno').value = '0';
+    document.getElementById('pAfterRenoValue').value = '';
+    document.getElementById('pMonthlyCosts').value = '0';
     updateDownPaymentDisplay();
 }
 
@@ -378,6 +436,8 @@ window.toggleEdit = (id) => {
         const renoInput = document.getElementById(`input-reno-${id}`);
         const rateInput = document.getElementById(`input-rate-${id}`);
         const rentInput = document.getElementById(`input-rent-${id}`);
+        const afterRenoInput = document.getElementById(`input-afterreno-${id}`);
+        const costsInput = document.getElementById(`input-costs-${id}`);
 
         const newName = nameInput ? nameInput.value : prop.name;
         const newPrice = priceInput ? (parseFloat(priceInput.value) || 0) * 1000000 : prop.price;
@@ -385,6 +445,8 @@ window.toggleEdit = (id) => {
         const newReno = renoInput ? (parseFloat(renoInput.value) || 0) * 1000000 : prop.renoCost;
         const newRate = rateInput ? (parseFloat(rateInput.value) || 0) : prop.rate;
         const newRent = rentInput ? (parseFloat(rentInput.value) || 0) * 1000 : prop.rent;
+        const newAfterReno = afterRenoInput ? ((parseFloat(afterRenoInput.value) || 0) > 0 ? (parseFloat(afterRenoInput.value)) * 1000000 : newPrice) : prop.afterRenoValue;
+        const newCosts = costsInput ? (parseFloat(costsInput.value) || 0) * 1000 : prop.monthlyCosts;
 
         // Validate before saving
         const errors = validateProperty({
@@ -405,6 +467,8 @@ window.toggleEdit = (id) => {
         prop.renoCost = newReno;
         prop.rate = newRate;
         prop.rent = newRent;
+        prop.afterRenoValue = newAfterReno;
+        prop.monthlyCosts = newCosts;
 
         // Recalculate and Save
         recalculateProperty(prop);
@@ -457,6 +521,10 @@ window.openSettings = () => {
     settingTaxInput.value = settings.taxRate;
     settingLawyerInput.value = settings.lawyerRate;
     settingInflationInput.value = settings.inflation;
+    // Sync preference controls
+    document.getElementById('prefTheme').value = preferences.theme;
+    document.getElementById('prefLanguage').value = preferences.language;
+    document.getElementById('prefCurrency').value = preferences.currency;
     settingsDrawer.classList.add('open');
     settingsBackdrop.classList.remove('hidden');
 };
@@ -481,17 +549,66 @@ settingTaxInput.addEventListener('input', onSettingsChange);
 settingLawyerInput.addEventListener('input', onSettingsChange);
 settingInflationInput.addEventListener('input', onSettingsChange);
 
+// --- Preference Controls ---
+const onPreferenceChange = () => {
+    preferences.theme = document.getElementById('prefTheme').value;
+    preferences.language = document.getElementById('prefLanguage').value;
+    preferences.currency = document.getElementById('prefCurrency').value;
+    savePreferences();
+    applyPreferencesUI();
+    if (properties.length > 0) renderCharts();
+};
+
+document.getElementById('prefTheme').addEventListener('change', onPreferenceChange);
+document.getElementById('prefLanguage').addEventListener('change', onPreferenceChange);
+document.getElementById('prefCurrency').addEventListener('change', onPreferenceChange);
+
+// Chart year range toggle
+window.setChartYears = (years) => {
+    preferences.chartYears = years;
+    savePreferences();
+    applyPreferencesUI();
+    if (properties.length > 0) renderCharts();
+};
+
+const applyPreferencesUI = () => {
+    // Apply theme
+    document.documentElement.classList.toggle('dark', preferences.theme === 'dark');
+
+    // Update chart year toggle buttons
+    const activeClasses = ['bg-indigo-100', 'text-indigo-700', 'border-indigo-300', 'dark:bg-indigo-900/30', 'dark:text-indigo-300', 'dark:border-indigo-700'];
+    const inactiveClasses = ['bg-white', 'dark:bg-zinc-800', 'text-gray-700', 'dark:text-zinc-300', 'hover:bg-gray-50', 'dark:hover:bg-zinc-700'];
+    document.querySelectorAll('#chartYearToggle button').forEach(btn => {
+        const y = parseInt(btn.dataset.years);
+        if (y === preferences.chartYears) {
+            btn.classList.add(...activeClasses);
+            btn.classList.remove(...inactiveClasses);
+        } else {
+            btn.classList.remove(...activeClasses);
+            btn.classList.add(...inactiveClasses);
+        }
+    });
+    // Update chart titles
+    document.querySelectorAll('[data-chart-title]').forEach(el => {
+        const base = el.dataset.chartTitle;
+        el.textContent = `${base} (${preferences.chartYears} Years)`;
+    });
+};
+
+const isDark = () => preferences.theme === 'dark';
+
 // --- Export / Import ---
 window.exportData = () => {
     const exportObj = {
         settings,
+        preferences,
         properties: properties.map(({ isEditing, ...rest }) => rest)
     };
     const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'property-analyzer-export.json';
+    a.download = 'property-calculator-export.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -513,6 +630,11 @@ window.importData = (event) => {
             if (data.settings) {
                 settings = { ...defaultSettings, ...data.settings };
                 saveSettings();
+            }
+            if (data.preferences) {
+                preferences = { ...defaultPreferences, ...data.preferences };
+                savePreferences();
+                applyPreferencesUI();
             }
             properties = data.properties.map(p => {
                 p.isEditing = false;
@@ -538,7 +660,9 @@ const encodeShareData = (s, props) => {
         const priceM = p.price / 1000000;
         const rentK = p.rent / 1000;
         const renoM = p.renoCost / 1000000;
-        return `${name}|${priceM}|${rentK}|${renoM}|${p.downPaymentPercent}|${p.rate}|${p.term}`;
+        const afterRenoM = (p.afterRenoValue || p.price) / 1000000;
+        const costsK = (p.monthlyCosts || 0) / 1000;
+        return `${name}|${priceM}|${rentK}|${renoM}|${p.downPaymentPercent}|${p.rate}|${p.term}|${afterRenoM}|${costsK}`;
     });
     const raw = [settingsPart, ...propParts].join(';');
     return btoa(unescape(encodeURIComponent(raw)));
@@ -563,16 +687,19 @@ const decodeShareData = (encoded) => {
 
         for (let i = 1; i < parts.length; i++) {
             const fields = parts[i].split('|');
-            if (fields.length !== 7) return null;
+            if (fields.length < 7) return null;
+            const price = parseFloat(fields[1]) * 1000000;
             decoded.properties.push({
                 id: Date.now() + i,
                 name: decodeURIComponent(fields[0]),
-                price: parseFloat(fields[1]) * 1000000,
+                price: price,
                 rent: parseFloat(fields[2]) * 1000,
                 renoCost: parseFloat(fields[3]) * 1000000,
                 downPaymentPercent: parseFloat(fields[4]),
                 rate: parseFloat(fields[5]),
                 term: parseFloat(fields[6]),
+                afterRenoValue: fields.length >= 8 ? parseFloat(fields[7]) * 1000000 : price,
+                monthlyCosts: fields.length >= 9 ? parseFloat(fields[8]) * 1000 : 0,
                 isEditing: false
             });
         }
@@ -619,7 +746,7 @@ const exitSharedView = () => {
 };
 
 const loadLocalProperties = () => {
-    const storedData = localStorage.getItem('property_analyzer_data');
+    const storedData = localStorage.getItem('property_calculator_data');
     if (storedData) {
         try {
             const parsed = JSON.parse(storedData);
@@ -634,8 +761,8 @@ const loadLocalProperties = () => {
 
 window.replaceWithSharedData = () => {
     exitSharedView();
-    localStorage.setItem('property_analyzer_settings', JSON.stringify(settings));
-    localStorage.setItem('property_analyzer_data', JSON.stringify(properties.map(({ isEditing, ...rest }) => rest)));
+    localStorage.setItem('property_calculator_settings', JSON.stringify(settings));
+    localStorage.setItem('property_calculator_data', JSON.stringify(properties.map(({ isEditing, ...rest }) => rest)));
     showToast('Shared data replaced your data');
 };
 
@@ -645,7 +772,7 @@ window.addSharedData = () => {
     exitSharedView();
     loadSettings();
     properties = merged.map(p => recalculateProperty(p));
-    localStorage.setItem('property_analyzer_data', JSON.stringify(properties.map(({ isEditing, ...rest }) => rest)));
+    localStorage.setItem('property_calculator_data', JSON.stringify(properties.map(({ isEditing, ...rest }) => rest)));
     updateUI();
     showToast('Shared properties added to your data');
 };
@@ -674,6 +801,8 @@ window.togglePreviewMyData = () => {
 
 function initApp() {
     loadSettings();
+    loadPreferences();
+    applyPreferencesUI();
 
     const shareParam = new URLSearchParams(window.location.search).get('s');
     if (shareParam) {
@@ -692,7 +821,7 @@ function initApp() {
         }
     }
 
-    const storedData = localStorage.getItem('property_analyzer_data');
+    const storedData = localStorage.getItem('property_calculator_data');
     if (storedData) {
         try {
             properties = JSON.parse(storedData);
@@ -720,16 +849,20 @@ function updateUI() {
         else el.classList.remove('opacity-50');
     });
 
+    const chartYearToggleWrapper = document.getElementById('chartYearToggleWrapper');
+
     if (properties.length === 0) {
         emptyState.classList.remove('hidden');
         resultsSection.classList.add('hidden');
         chartsContainer.classList.add('hidden');
+        chartYearToggleWrapper.classList.add('hidden');
         return;
     }
 
     emptyState.classList.add('hidden');
     resultsSection.classList.remove('hidden');
     chartsContainer.classList.remove('hidden');
+    chartYearToggleWrapper.classList.remove('hidden');
 
     renderTable();
     renderCharts();
@@ -745,6 +878,8 @@ function renderTable() {
         const priceM = (prop.price / 1000000).toFixed(1).replace(/\.0$/, '');
         const rentK = prop.rent / 1000;
         const renoM = (prop.renoCost / 1000000).toFixed(1).replace(/\.0$/, '');
+        const afterRenoM = ((prop.afterRenoValue || prop.price) / 1000000).toFixed(1).replace(/\.0$/, '');
+        const costsK = ((prop.monthlyCosts || 0) / 1000);
 
         const downM = (prop.downPayment / 1000000).toFixed(1).replace(/\.0$/, '');
 
@@ -755,32 +890,42 @@ function renderTable() {
         const safeName = escapeHTML(prop.name);
 
         const commonCells = `
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                <div class="cursor-help border-b border-dotted border-gray-400 inline-block pb-0.5"
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">
+                <div class="cursor-help border-b border-dotted border-gray-400 dark:border-zinc-500 inline-block pb-0.5"
                      onmouseenter="showBreakdownTooltip(event, ${prop.id})"
                      onmouseleave="hideBreakdownTooltip()"
                      onclick="showBreakdownTooltip(event, ${prop.id})">
-                    <div id="ic-text-${prop.id}" class="font-medium text-gray-900">${formatCompact(prop.totalInvested)}</div>
-                    <div class="text-xs text-gray-400 mt-0.5">(${prop.downPaymentPercent}% + Fees)</div>
+                    <div id="ic-text-${prop.id}" class="font-medium text-gray-900 dark:text-zinc-100">${formatCompact(prop.totalInvested)}</div>
+                    <div class="text-xs text-gray-400 dark:text-zinc-500 mt-0.5">(${prop.downPaymentPercent}% + Fees)</div>
                 </div>
                 ${prop.isEditing ? `
-                    <div class="mt-2 space-y-1 border-t pt-1 border-gray-200">
-                        <div class="text-xs text-gray-400 flex items-center">
-                            <input type="number" step="0.01" id="input-down-${prop.id}" class="table-input w-10 text-xs text-gray-500"
+                    <div class="mt-2 space-y-1 border-t pt-1 border-gray-200 dark:border-zinc-700">
+                        <div class="text-xs text-gray-400 dark:text-zinc-500 flex items-center">
+                            <input type="number" step="0.01" id="input-down-${prop.id}" class="table-input w-10 text-xs"
                                    value="${prop.downPaymentPercent}"
                                    oninput="syncTableDown(${prop.id}, 'percent')">
                             <span class="ml-1">%</span>
                         </div>
-                        <div class="text-xs text-gray-400 flex items-center">
-                            <input type="number" step="0.1" id="input-down-value-${prop.id}" class="table-input w-14 text-xs text-gray-500"
+                        <div class="text-xs text-gray-400 dark:text-zinc-500 flex items-center">
+                            <input type="number" step="0.1" id="input-down-value-${prop.id}" class="table-input w-14 text-xs"
                                    value="${downM}"
                                    oninput="syncTableDown(${prop.id}, 'value')">
                             <span class="ml-1">M Ft</span>
                         </div>
-                        <div class="text-xs text-gray-400 flex items-center">
-                            <input type="number" step="0.1" id="input-reno-${prop.id}" class="table-input w-10 text-xs text-gray-500"
+                        <div class="text-xs text-gray-400 dark:text-zinc-500 flex items-center">
+                            <input type="number" step="0.1" id="input-reno-${prop.id}" class="table-input w-10 text-xs"
                                    value="${renoM}">
                             <span class="ml-1">M Reno</span>
+                        </div>
+                        <div class="text-xs text-gray-400 dark:text-zinc-500 flex items-center">
+                            <input type="number" step="0.1" id="input-afterreno-${prop.id}" class="table-input w-14 text-xs"
+                                   value="${afterRenoM}" placeholder="${priceM}">
+                            <span class="ml-1">M Val</span>
+                        </div>
+                        <div class="text-xs text-gray-400 dark:text-zinc-500 flex items-center">
+                            <input type="number" step="1" id="input-costs-${prop.id}" class="table-input w-14 text-xs"
+                                   value="${costsK}">
+                            <span class="ml-1">k Cost</span>
                         </div>
                     </div>
                 ` : ''}
@@ -789,11 +934,11 @@ function renderTable() {
 
         if (prop.isEditing) {
             tr.innerHTML = `
-                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    <input type="text" id="input-name-${prop.id}" class="table-input font-bold text-gray-900"
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-zinc-100">
+                    <input type="text" id="input-name-${prop.id}" class="table-input font-bold"
                            value="${safeName}">
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">
                     <div class="flex items-center">
                         <input type="number" step="0.1" id="input-price-${prop.id}" class="table-input w-16"
                                value="${priceM}">
@@ -801,15 +946,15 @@ function renderTable() {
                     </div>
                 </td>
                 ${commonCells}
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">
                     <div class="flex items-center">
                         <input type="number" step="0.01" id="input-rate-${prop.id}" class="table-input w-14"
                                value="${prop.rate}">
                         <span class="ml-1 text-xs">%</span>
                     </div>
                 </td>
-                <td id="mortgage-${prop.id}" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatHUF(prop.monthlyPayment)}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <td id="mortgage-${prop.id}" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">${formatHUF(prop.monthlyPayment)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">
                     <div class="flex items-center">
                         <input type="number" id="input-rent-${prop.id}" class="table-input w-16"
                                value="${rentK}">
@@ -819,22 +964,22 @@ function renderTable() {
                 <td id="cashflow-${prop.id}" class="px-6 py-4 whitespace-nowrap text-sm ${cfClass}">${formatHUF(prop.cashflow)}</td>
                 <td id="roi5-${prop.id}" class="px-6 py-4 whitespace-nowrap text-sm font-medium ${roi5Class}">${roi5.toFixed(1)}%</td>
                 <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                    <button onclick="toggleEdit(${prop.id})" class="text-indigo-600 hover:text-indigo-900 font-bold">Save</button>
+                    <button onclick="toggleEdit(${prop.id})" class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 font-bold">Save</button>
                 </td>
             `;
         } else {
             tr.innerHTML = `
-                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${safeName}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatCompact(prop.price)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-zinc-100">${safeName}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">${formatCompact(prop.price)}</td>
                 ${commonCells}
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${prop.rate}%</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatHUF(prop.monthlyPayment)}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatHUF(prop.rent)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">${prop.rate}%</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">${formatHUF(prop.monthlyPayment)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-zinc-400">${formatHUF(prop.rent)}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm ${cfClass}">${formatHUF(prop.cashflow)}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium ${roi5Class}">${roi5.toFixed(1)}%</td>
                 <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
                     ${isSharedView ? '' : `
-                    <button onclick="toggleEdit(${prop.id})" class="text-indigo-600 hover:text-indigo-900 hover:underline">Edit</button>
+                    <button onclick="toggleEdit(${prop.id})" class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 hover:underline">Edit</button>
                     <button onclick="removeProperty(${prop.id})" class="text-red-600 hover:text-red-900 hover:underline">Remove</button>
                     `}
                 </td>
@@ -854,12 +999,14 @@ const chartColors = [
 ];
 
 function renderCharts() {
-    const years = 15;
+    const years = preferences.chartYears;
     const labels = Array.from({length: years + 1}, (_, i) => `Year ${i}`);
+    const gridColor = isDark() ? '#3f3f46' : '#f3f4f6';
+    const tickColor = isDark() ? '#a1a1aa' : undefined;
 
     const valueDatasets = properties.map((prop, index) => {
         const data = [];
-        let currentValue = prop.price;
+        let currentValue = prop.afterRenoValue || prop.price;
         for (let i = 0; i <= years; i++) {
             data.push(currentValue);
             currentValue = currentValue * (1 + (settings.inflation / 100));
@@ -939,17 +1086,19 @@ function renderCharts() {
                         }
                     }
                 },
-                legend: { position: 'top' }
+                legend: { position: 'top', labels: { color: tickColor } }
             },
             scales: {
-                x: { grid: { display: false } },
+                x: { grid: { display: false }, ticks: { color: tickColor } },
                 y: {
+                    beginAtZero: true,
                     ticks: {
+                        color: tickColor,
                         callback: function(value) {
                             return new Intl.NumberFormat('hu-HU', { notation: "compact", compactDisplay: "short" }).format(value) + ' Ft';
                         }
                     },
-                    grid: { color: '#f3f4f6' }
+                    grid: { color: gridColor }
                 }
             }
         }
@@ -977,17 +1126,158 @@ function renderCharts() {
                         }
                     }
                 },
-                legend: { position: 'top' }
+                legend: { position: 'top', labels: { color: tickColor } }
             },
             scales: {
-                x: { grid: { display: false } },
+                x: { grid: { display: false }, ticks: { color: tickColor } },
                 y: {
                     ticks: {
+                        color: tickColor,
                         callback: function(value) {
                             return value + '%';
                         }
                     },
-                    grid: { color: '#f3f4f6' }
+                    grid: { color: gridColor }
+                }
+            }
+        }
+    });
+
+    // ROI Value Chart (absolute HUF)
+    const roiValueDatasets = properties.map((prop, index) => {
+        const data = [];
+        for (let i = 0; i <= years; i++) {
+            data.push(calculateProjectedProfit(prop, i));
+        }
+        const style = chartColors[index % chartColors.length];
+        return {
+            label: prop.name,
+            data: data,
+            borderColor: style.border,
+            backgroundColor: style.bg,
+            borderWidth: 2,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            fill: false,
+            tension: 0.4
+        };
+    });
+
+    const bondValueData = [];
+    for (let i = 0; i <= years; i++) {
+        const avgInvested = properties.reduce((sum, p) => sum + p.totalInvested, 0) / properties.length;
+        bondValueData.push(avgInvested * (Math.pow(1 + benchmarkRate, i) - 1));
+    }
+    roiValueDatasets.push({
+        label: `Benchmark (${benchmarkRateInput.value}%)`,
+        data: bondValueData,
+        borderColor: '#4b5563',
+        borderDash: [5, 5],
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        fill: false,
+        tension: 0.4,
+        order: 99
+    });
+
+    const ctxRoiValue = document.getElementById('roiValueChart').getContext('2d');
+    if (roiValueChartInstance) roiValueChartInstance.destroy();
+    roiValueChartInstance = new Chart(ctxRoiValue, {
+        type: 'line',
+        data: { labels: labels, datasets: roiValueDatasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) label += ': ';
+                            if (context.parsed.y !== null) {
+                                label += new Intl.NumberFormat('hu-HU', { style: 'currency', currency: 'HUF', maximumFractionDigits: 0 }).format(context.parsed.y);
+                            }
+                            return label;
+                        }
+                    }
+                },
+                legend: { position: 'top', labels: { color: tickColor } }
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: tickColor } },
+                y: {
+                    ticks: {
+                        color: tickColor,
+                        callback: function(value) {
+                            return new Intl.NumberFormat('hu-HU', { notation: "compact", compactDisplay: "short" }).format(value) + ' Ft';
+                        }
+                    },
+                    grid: { color: gridColor }
+                }
+            }
+        }
+    });
+
+    // Equity Chart (Property Value - Remaining Loan)
+    const equityDatasets = properties.map((prop, index) => {
+        const data = [];
+        let currentValue = prop.afterRenoValue || prop.price;
+        for (let i = 0; i <= years; i++) {
+            const remainingLoan = getRemainingBalance(prop.loanAmount, prop.rate, prop.term, i);
+            data.push(currentValue - remainingLoan);
+            currentValue = currentValue * (1 + (settings.inflation / 100));
+        }
+        const style = chartColors[index % chartColors.length];
+        return {
+            label: prop.name,
+            data: data,
+            borderColor: style.border,
+            backgroundColor: style.bg,
+            borderWidth: 2,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            fill: false,
+            tension: 0.4
+        };
+    });
+
+    const ctxEquity = document.getElementById('equityChart').getContext('2d');
+    if (equityChartInstance) equityChartInstance.destroy();
+    equityChartInstance = new Chart(ctxEquity, {
+        type: 'line',
+        data: { labels: labels, datasets: equityDatasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) label += ': ';
+                            if (context.parsed.y !== null) {
+                                label += new Intl.NumberFormat('hu-HU', { style: 'currency', currency: 'HUF', maximumFractionDigits: 0 }).format(context.parsed.y);
+                            }
+                            return label;
+                        }
+                    }
+                },
+                legend: { position: 'top', labels: { color: tickColor } }
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: tickColor } },
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        color: tickColor,
+                        callback: function(value) {
+                            return new Intl.NumberFormat('hu-HU', { notation: "compact", compactDisplay: "short" }).format(value) + ' Ft';
+                        }
+                    },
+                    grid: { color: gridColor }
                 }
             }
         }

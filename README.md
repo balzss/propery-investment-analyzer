@@ -1,1 +1,1 @@
-[Propery Investment Analyzer](https://balzss.github.io/propery-investment-analyzer/)
+[Property Investment Calculator](https://balzss.github.io/property-investment-calculator/)
